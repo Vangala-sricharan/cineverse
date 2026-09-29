@@ -1,0 +1,91 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Outfit', sans-serif;
+    --font-sans: 'Plus Jakarta Sans', sans-serif;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #07080b;
+    color: #e2e8f0;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+  }
+}
+
+/* Custom smooth dark scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #090a0f;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e2230;
+  border-radius: 9999px;
+  border: 2px solid #090a0f;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2e344a;
+}
+
+/* Hide scrollbar for clean carousels while preserving scroll functionality */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Cinematic glowing and glass gradients */
+.cine-gradient-red {
+  background: linear-gradient(135deg, #ff2a5f 0%, #d80032 100%);
+}
+
+.cine-glow {
+  box-shadow: 0 0 25px rgba(255, 42, 95, 0.25);
+}
+
+.cine-glow-subtle {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+}
+
+.glass-surface {
+  background: rgba(14, 16, 23, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.glass-surface-hover:hover {
+  background: rgba(22, 25, 36, 0.85);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+/* Accessible Focus States */
+:focus-visible {
+  outline: 2px solid #ff2a5f;
+  outline-offset: 2px;
+}
+
+/* Accessibility: Support prefers-reduced-motion for calming animations */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

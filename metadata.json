@@ -1,0 +1,6 @@
+{
+  "name": "CINEVERSE",
+  "description": "Not just movies. Experiences. Premium cinematic movie discovery and recommendation platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
