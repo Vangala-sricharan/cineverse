@@ -40,22 +40,22 @@ class LiveTmdbMovieService implements IMovieService {
   private inFlightRequests = new Map<string, Promise<any>>();
 
   private async fetchApi<T>(endpoint: string, params: Record<string, string> = {}): Promise<T> {
-    const origin = typeof window !== 'undefined' && window.location ? window.location.origin : 'http://localhost:3000';
-    const url = new URL(endpoint, origin);
+    const origin = typeof window !== 'undefined' && window.location ? window.location.origin : '';
+    const url = new URL(endpoint, origin || 'http://localhost:3000');
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && v !== '' && v !== 'All') {
         url.searchParams.set(k, v);
       }
     }
 
-    const requestKey = url.toString();
+    const requestKey = url.pathname + url.search;
     if (this.inFlightRequests.has(requestKey)) {
       return this.inFlightRequests.get(requestKey) as Promise<T>;
     }
 
     const fetchPromise = (async () => {
       try {
-        const response = await fetch(url.toString(), {
+        const response = await fetch(requestKey, {
           headers: {
             'Accept': 'application/json',
           },
@@ -73,7 +73,7 @@ class LiveTmdbMovieService implements IMovieService {
             );
           }
           throw new MovieServiceError(
-            'Unable to connect to movie service. Please verify your connection or TMDB configuration.',
+            'Unable to connect to movie service. Server returned non-JSON response.',
             'NON_JSON_RESPONSE'
           );
         }
@@ -83,7 +83,7 @@ class LiveTmdbMovieService implements IMovieService {
         if (!response.ok) {
           if (data.error === 'TMDB_CREDENTIALS_MISSING') {
             throw new MovieServiceError(
-              data.message || 'TMDB API key is not configured in environment variables. Please add TMDB_API_KEY in the environment secrets to connect live movie data.',
+              data.message || 'TMDB Read Access Token is not configured. Please add TMDB_READ_ACCESS_TOKEN in Vercel environment variables.',
               'TMDB_CONFIG_REQUIRED',
               response.status
             );
@@ -91,7 +91,7 @@ class LiveTmdbMovieService implements IMovieService {
 
           if (response.status === 401 || data.error === 'TMDB_INVALID_KEY') {
             throw new MovieServiceError(
-              'TMDB API Key is invalid or unauthorized.',
+              data.message || 'TMDB Read Access Token is invalid or unauthorized.',
               'TMDB_INVALID_KEY',
               401
             );
@@ -99,15 +99,15 @@ class LiveTmdbMovieService implements IMovieService {
 
           if (response.status === 429 || data.error === 'TMDB_RATE_LIMITED') {
             throw new MovieServiceError(
-              'Movie catalog rate limit exceeded. Please wait a moment.',
+              data.message || 'Movie catalog rate limit exceeded. Please wait a moment.',
               'RATE_LIMITED',
               429
             );
           }
 
           throw new MovieServiceError(
-            data.message || `Catalog server responded with status ${response.status}`,
-            'HTTP_ERROR',
+            data.message || `Movie service error (${response.status})`,
+            data.error || 'HTTP_ERROR',
             response.status
           );
         }

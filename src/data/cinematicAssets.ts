@@ -226,6 +226,44 @@ export const INCEPTION_BACKDROP = svgDataUri(`
 </svg>
 `);
 
+// 3. Ultra-detailed Neutral Cinematic Film Projection Backdrop
+export const DEFAULT_CINEMATIC_HERO_BACKDROP = svgDataUri(`
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="100%" height="100%">
+  <defs>
+    <radialGradient id="beamGlow" cx="80%" cy="30%" r="65%">
+      <stop offset="0%" stop-color="#1e293b" stop-opacity="0.9"/>
+      <stop offset="35%" stop-color="#0f172a" stop-opacity="0.85"/>
+      <stop offset="70%" stop-color="#07080b" stop-opacity="0.98"/>
+      <stop offset="100%" stop-color="#07080b" stop-opacity="1"/>
+    </radialGradient>
+    <linearGradient id="projectorLight" x1="100%" y1="15%" x2="45%" y2="85%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.25"/>
+      <stop offset="25%" stop-color="#94a3b8" stop-opacity="0.12"/>
+      <stop offset="60%" stop-color="#38bdf8" stop-opacity="0.04"/>
+      <stop offset="100%" stop-color="transparent" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="stageGlow" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#ff2a5f" stop-opacity="0.1"/>
+      <stop offset="50%" stop-color="transparent" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#beamGlow)"/>
+
+  <!-- Dramatic Cinematic Projection Beam -->
+  <polygon points="1600,80 1600,280 650,900 350,900" fill="url(#projectorLight)"/>
+
+  <!-- Distant Cinema Architecture & Screen Silhouette -->
+  <g opacity="0.3">
+    <rect x="750" y="160" width="600" height="340" rx="8" fill="#020617" stroke="#334155" stroke-width="2"/>
+    <path d="M 680,680 L 1420,680 L 1550,900 L 550,900 Z" fill="#050811"/>
+  </g>
+
+  <!-- Ambient Cinematic Stage Glow -->
+  <rect width="1600" height="900" fill="url(#stageGlow)"/>
+</svg>
+`);
+
 // 4. Default resilient cast and user avatar
 export const DEFAULT_AVATAR = svgDataUri(`
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100%" height="100%">

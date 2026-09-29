@@ -1,5 +1,4 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { VERIFIED_MOVIES } from '../src/data/verifiedMovieCatalog';
 
 // Language lookup
 const ISO_LANG_MAP: Record<string, string> = {
@@ -40,36 +39,66 @@ const GENRE_MAP: Record<number, string> = {
   37: 'Western',
 };
 
-function hasTmdbCredentials(): boolean {
-  return Boolean(process.env.TMDB_API_KEY || process.env.TMDB_ACCESS_TOKEN);
+function getTmdbToken(): string | null {
+  return (
+    process.env.TMDB_READ_ACCESS_TOKEN ||
+    process.env.TMDB_ACCESS_TOKEN ||
+    null
+  );
 }
 
-// TMDB API Request Helper
-async function fetchTmdb(endpoint: string, params: Record<string, string> = {}): Promise<any> {
-  const apiKey = process.env.TMDB_API_KEY;
-  const accessToken = process.env.TMDB_ACCESS_TOKEN;
+function hasTmdbCredentials(): boolean {
+  return Boolean(getTmdbToken() || process.env.TMDB_API_KEY);
+}
 
-  if (!apiKey && !accessToken) {
+// TMDB API Request Helper with safe server-side logging (never logs tokens)
+async function fetchTmdb(endpoint: string, params: Record<string, string> = {}): Promise<any> {
+  const readToken = getTmdbToken();
+  const apiKey = process.env.TMDB_API_KEY;
+
+  if (!readToken && !apiKey) {
+    console.error('[TMDB API Audit] Request failed: Neither TMDB_READ_ACCESS_TOKEN nor TMDB_API_KEY is defined in process.env');
     throw new Error('TMDB_CREDENTIALS_MISSING');
   }
 
   const url = new URL(`https://api.themoviedb.org/3${endpoint}`);
-  if (apiKey) url.searchParams.set('api_key', apiKey);
+  
+  // Prefer TMDB Read Access Token with Bearer Auth
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (readToken) {
+    headers['Authorization'] = `Bearer ${readToken}`;
+  } else if (apiKey) {
+    url.searchParams.set('api_key', apiKey);
+  }
+
   for (const [k, v] of Object.entries(params)) {
     if (v) url.searchParams.set(k, v);
   }
 
-  const headers: Record<string, string> = { Accept: 'application/json' };
-  if (accessToken && !apiKey) {
-    headers['Authorization'] = `Bearer ${accessToken}`;
+  try {
+    const res = await fetch(url.toString(), { headers });
+
+    if (res.status === 401) {
+      console.error(`[TMDB API Audit] Upstream 401 Unauthorized for ${endpoint}. Authentication failed with TMDB_READ_ACCESS_TOKEN.`);
+      throw new Error('TMDB_INVALID_KEY');
+    }
+    if (res.status === 429) {
+      console.warn(`[TMDB API Audit] Upstream 429 Rate Limited for ${endpoint}.`);
+      throw new Error('TMDB_RATE_LIMITED');
+    }
+    if (!res.ok) {
+      console.error(`[TMDB API Audit] Upstream error ${res.status} ${res.statusText} for ${endpoint}`);
+      throw new Error(`TMDB_ERROR_${res.status}`);
+    }
+
+    return await res.json();
+  } catch (err: any) {
+    if (err.name === 'TypeError' || err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED') {
+      console.error(`[TMDB API Audit] Network failure when reaching TMDB (${url.origin}): ${err.message}`);
+      throw new Error('TMDB_NETWORK_FAILURE');
+    }
+    throw err;
   }
-
-  const res = await fetch(url.toString(), { headers });
-  if (res.status === 401) throw new Error('TMDB_INVALID_KEY');
-  if (res.status === 429) throw new Error('TMDB_RATE_LIMITED');
-  if (!res.ok) throw new Error(`TMDB_ERROR_${res.status}`);
-
-  return res.json();
 }
 
 function normalizeTmdbMovie(raw: any): any {
@@ -187,90 +216,98 @@ export default async function handler(req: any, res: any) {
       const configured = hasTmdbCredentials();
       return res.status(200).json({
         configured,
-        provider: configured ? 'The Movie Database (TMDB Live)' : 'The Movie Database (Verified Provider)',
+        provider: configured ? 'The Movie Database (TMDB Live)' : 'The Movie Database (Not Configured)',
+      });
+    }
+
+    if (!hasTmdbCredentials()) {
+      return res.status(503).json({
+        error: 'TMDB_CREDENTIALS_MISSING',
+        message: 'TMDB authentication token is not configured. Please configure TMDB_READ_ACCESS_TOKEN in environment variables.',
+      });
+    }
+
+    function handleTmdbError(err: any, fallbackMessage: string) {
+      if (err.message === 'TMDB_INVALID_KEY') {
+        return res.status(401).json({
+          error: 'TMDB_INVALID_KEY',
+          message: 'TMDB authentication failed: TMDB_READ_ACCESS_TOKEN is invalid or unauthorized.',
+        });
+      }
+      if (err.message === 'TMDB_RATE_LIMITED') {
+        return res.status(429).json({
+          error: 'TMDB_RATE_LIMITED',
+          message: 'TMDB rate limit reached. Please retry in a few moments.',
+        });
+      }
+      if (err.message === 'TMDB_NETWORK_FAILURE') {
+        return res.status(504).json({
+          error: 'TMDB_NETWORK_FAILURE',
+          message: 'Unable to reach TMDB API service. Please verify network connectivity.',
+        });
+      }
+      if (err.message === 'TMDB_ERROR_404') {
+        return res.status(404).json({
+          error: 'NOT_FOUND',
+          message: 'Requested movie resource was not found on TMDB.',
+        });
+      }
+      return res.status(502).json({
+        error: 'TMDB_UPSTREAM_ERROR',
+        message: err.message ? `TMDB Service Notice: ${err.message}` : fallbackMessage,
       });
     }
 
     if (action === 'trending') {
-      if (!hasTmdbCredentials()) {
-        const trending = VERIFIED_MOVIES.filter((m) => m.isTrending || m.rating >= 8.0);
-        return res.status(200).json(trending.length > 0 ? trending : VERIFIED_MOVIES);
-      }
       try {
         const data = await fetchTmdb('/trending/movie/week');
         const normalized = (data.results || []).map(normalizeTmdbMovie);
         return res.status(200).json(normalized);
-      } catch {
-        return res.status(200).json(VERIFIED_MOVIES.filter((m) => m.isTrending || m.rating >= 8.0));
+      } catch (err: any) {
+        return handleTmdbError(err, 'Failed to fetch trending movies from TMDB.');
       }
     }
 
     if (action === 'popular') {
-      if (!hasTmdbCredentials()) {
-        const popular = VERIFIED_MOVIES.filter((m) => m.isPopular || m.rating >= 7.8);
-        return res.status(200).json(popular.length > 0 ? popular : VERIFIED_MOVIES);
-      }
       try {
         const data = await fetchTmdb('/movie/popular', { page: '1' });
         const normalized = (data.results || []).map(normalizeTmdbMovie);
         return res.status(200).json(normalized);
-      } catch {
-        return res.status(200).json(VERIFIED_MOVIES.filter((m) => m.isPopular));
+      } catch (err: any) {
+        return handleTmdbError(err, 'Failed to fetch popular movies from TMDB.');
       }
     }
 
     if (action === 'upcoming') {
-      if (!hasTmdbCredentials()) {
-        const upcoming = VERIFIED_MOVIES.filter((m) => m.isUpcoming || (m.year && m.year >= 2024));
-        return res.status(200).json(upcoming.length > 0 ? upcoming : VERIFIED_MOVIES);
-      }
       try {
         const data = await fetchTmdb('/movie/upcoming', { page: '1' });
         const normalized = (data.results || []).map(normalizeTmdbMovie);
         return res.status(200).json(normalized);
-      } catch {
-        return res.status(200).json(VERIFIED_MOVIES.filter((m) => m.isUpcoming));
+      } catch (err: any) {
+        return handleTmdbError(err, 'Failed to fetch upcoming movies from TMDB.');
       }
     }
 
     if (action === 'now-playing') {
-      if (!hasTmdbCredentials()) {
-        const nowPlaying = VERIFIED_MOVIES.filter((m) => m.year === 2024);
-        return res.status(200).json(nowPlaying.length > 0 ? nowPlaying : VERIFIED_MOVIES);
-      }
       try {
         const data = await fetchTmdb('/movie/now_playing', { page: '1' });
         const normalized = (data.results || []).map(normalizeTmdbMovie);
         return res.status(200).json(normalized);
-      } catch {
-        return res.status(200).json(VERIFIED_MOVIES.filter((m) => m.year === 2024));
+      } catch (err: any) {
+        return handleTmdbError(err, 'Failed to fetch now playing movies from TMDB.');
       }
     }
 
     if (action === 'search') {
       const q = (url.searchParams.get('q') || (req.query && req.query.q) || '').trim().toLowerCase();
-      const langFilter = (url.searchParams.get('language') || (req.query && req.query.language) || '').toLowerCase();
-      const ratingFilter = parseFloat(url.searchParams.get('rating') || (req.query && req.query.rating) || '0');
-
       if (!q) return res.status(200).json([]);
-
-      if (!hasTmdbCredentials()) {
-        const matched = VERIFIED_MOVIES.filter((m) => {
-          const matchText = `${m.title} ${m.originalTitle || ''} ${m.director || ''} ${m.overview} ${m.genres.join(' ')}`.toLowerCase();
-          const textMatches = matchText.includes(q) || q.split(' ').some((word: string) => word.length > 3 && matchText.includes(word));
-          const langMatches = !langFilter || langFilter === 'all' || m.language.toLowerCase() === langFilter;
-          const ratingMatches = !ratingFilter || m.rating >= ratingFilter;
-          return textMatches && langMatches && ratingMatches;
-        });
-        return res.status(200).json(matched);
-      }
 
       try {
         const data = await fetchTmdb('/search/movie', { query: q, include_adult: 'false' });
         const normalized = (data.results || []).map(normalizeTmdbMovie);
         return res.status(200).json(normalized);
-      } catch {
-        return res.status(200).json(VERIFIED_MOVIES.filter((m) => m.title.toLowerCase().includes(q)));
+      } catch (err: any) {
+        return handleTmdbError(err, 'Failed to execute search on TMDB.');
       }
     }
 
@@ -280,29 +317,6 @@ export default async function handler(req: any, res: any) {
       const year = url.searchParams.get('year') || (req.query && req.query.year);
       const rating = url.searchParams.get('rating') || (req.query && req.query.rating);
       const sortBy = url.searchParams.get('sort_by') || (req.query && req.query.sort_by);
-
-      if (!hasTmdbCredentials()) {
-        let list = [...VERIFIED_MOVIES];
-        if (genre && genre !== 'All') {
-          list = list.filter((m) => m.genres.some((g) => g.toLowerCase().includes(genre.toLowerCase())));
-        }
-        if (language && language !== 'All') {
-          list = list.filter((m) => m.language.toLowerCase() === language.toLowerCase());
-        }
-        if (year && year !== 'All') {
-          list = list.filter((m) => String(m.year) === year);
-        }
-        if (rating && rating !== 'All') {
-          const minR = parseFloat(rating);
-          if (!isNaN(minR)) list = list.filter((m) => m.rating >= minR);
-        }
-        if (sortBy === 'vote_average.desc') {
-          list.sort((a, b) => b.rating - a.rating);
-        } else {
-          list.sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
-        }
-        return res.status(200).json(list);
-      }
 
       const params: Record<string, string> = {
         sort_by: sortBy || 'popularity.desc',
@@ -330,16 +344,12 @@ export default async function handler(req: any, res: any) {
         const data = await fetchTmdb('/discover/movie', params);
         const normalized = (data.results || []).map(normalizeTmdbMovie);
         return res.status(200).json(normalized);
-      } catch {
-        return res.status(200).json(VERIFIED_MOVIES);
+      } catch (err: any) {
+        return handleTmdbError(err, 'Failed to discover movies on TMDB.');
       }
     }
 
     if (action === 'genres') {
-      if (!hasTmdbCredentials()) {
-        const allGenres = Array.from(new Set(VERIFIED_MOVIES.flatMap((m) => m.genres))).sort();
-        return res.status(200).json(allGenres);
-      }
       try {
         const data = await fetchTmdb('/genre/movie/list');
         const list = (data.genres || []).map((g: any) => g.name);
@@ -352,37 +362,27 @@ export default async function handler(req: any, res: any) {
     // Movie Detail or Similar
     if (targetId) {
       if (isSimilar) {
-        if (!hasTmdbCredentials()) {
-          const current = VERIFIED_MOVIES.find((m) => m.id === targetId);
-          const similar = VERIFIED_MOVIES.filter((m) => m.id !== targetId && (!current || m.genres.some((g) => current.genres.includes(g))));
-          return res.status(200).json(similar.slice(0, 6));
-        }
         try {
           const data = await fetchTmdb(`/movie/${targetId}/similar`, { page: '1' });
           const normalized = (data.results || []).map(normalizeTmdbMovie);
           return res.status(200).json(normalized);
-        } catch {
-          return res.status(200).json(VERIFIED_MOVIES.filter((m) => m.id !== targetId).slice(0, 6));
+        } catch (err: any) {
+          return handleTmdbError(err, 'Failed to fetch similar movies from TMDB.');
         }
       }
 
       // Single movie detail
-      if (!hasTmdbCredentials()) {
-        const found = VERIFIED_MOVIES.find((m) => m.id === targetId);
-        if (found) return res.status(200).json(found);
-        return res.status(404).json({ error: 'NOT_FOUND', message: 'Movie not found.' });
-      }
-
       try {
         const data = await fetchTmdb(`/movie/${targetId}`, {
           append_to_response: 'credits,videos,similar',
         });
         const normalized = normalizeTmdbMovie(data);
         return res.status(200).json(normalized);
-      } catch {
-        const found = VERIFIED_MOVIES.find((m) => m.id === targetId);
-        if (found) return res.status(200).json(found);
-        return res.status(404).json({ error: 'NOT_FOUND', message: 'Movie not found.' });
+      } catch (err: any) {
+        if (err.message === 'TMDB_ERROR_404') {
+          return res.status(404).json({ error: 'NOT_FOUND', message: 'Movie not found.' });
+        }
+        return handleTmdbError(err, 'Failed to fetch movie details from TMDB.');
       }
     }
 

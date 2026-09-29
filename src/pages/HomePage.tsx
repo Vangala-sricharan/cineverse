@@ -23,22 +23,44 @@ export const HomePage: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const [trending, popular, nowPlaying, upcoming, personalized] = await Promise.all([
+      const [trendingRes, popularRes, nowPlayingRes, upcomingRes] = await Promise.allSettled([
         MovieService.getTrendingMovies(),
         MovieService.getPopularMovies(),
         MovieService.getNowPlayingMovies(),
         MovieService.getUpcomingMovies(),
-        RecommendationEngine.recommend({
-          usePersonalization: true,
-          limit: 8,
-        }),
       ]);
+
+      const trending = trendingRes.status === 'fulfilled' ? trendingRes.value : [];
+      const popular = popularRes.status === 'fulfilled' ? popularRes.value : [];
+      const nowPlaying = nowPlayingRes.status === 'fulfilled' ? nowPlayingRes.value : [];
+      const upcoming = upcomingRes.status === 'fulfilled' ? upcomingRes.value : [];
 
       setTrendingMovies(trending);
       setPopularMovies(popular);
       setNowPlayingMovies(nowPlaying);
       setUpcomingMovies(upcoming);
-      setPickedForYouMovies(personalized.map((r) => r.movie));
+
+      // If all catalog requests failed, report the specific reason
+      if (trending.length === 0 && popular.length === 0 && nowPlaying.length === 0 && upcoming.length === 0) {
+        const firstError = [trendingRes, popularRes, nowPlayingRes, upcomingRes].find(
+          (r) => r.status === 'rejected'
+        ) as PromiseRejectedResult | undefined;
+
+        const errorMsg = firstError?.reason?.message || 'Unable to connect to movie service. Please verify your connection or TMDB configuration.';
+        setError(errorMsg);
+      } else {
+        // Try personalized recommendations non-blockingly
+        try {
+          const personalized = await RecommendationEngine.recommend({
+            usePersonalization: true,
+            limit: 8,
+          });
+          setPickedForYouMovies(personalized.map((r) => r.movie));
+        } catch {
+          // If personalized recommendations fail, fallback to top trending/popular
+          setPickedForYouMovies(trending.slice(0, 8));
+        }
+      }
     } catch (err: any) {
       console.warn('Movie catalog notice:', err?.message || err);
       setError(
@@ -86,10 +108,18 @@ export const HomePage: React.FC = () => {
     }
   };
 
+  // Find genuine movie with a valid backdrop from real data
+  const backdropCandidate =
+    trendingMovies.find((m) => Boolean(m.backdropUrl)) ||
+    popularMovies.find((m) => Boolean(m.backdropUrl)) ||
+    pickedForYouMovies.find((m) => Boolean(m.backdropUrl)) ||
+    null;
+
   return (
     <div className="min-h-screen bg-[#07080b] pb-20">
       {/* Hero Section */}
       <HeroBanner
+        featuredMovie={backdropCandidate}
         onExploreMoodClick={scrollToMood}
       />
 
